@@ -1,110 +1,151 @@
-# Road Junction DFS traversal - RV32I / Ripes
-# Full traversal from node 0.
-# explored_count, peak_frontier, traversal_order are stored in data memory.
+# =====================================================================
+#  DFS - Road junction route finder - pure algorithm (no console I/O)
+#  Derived from Console_files/Road_junction_route_finder/dfs_console.s
+#  Console output removed; results are left in data memory. RV32I / Ripes.
+# =====================================================================
 .data
-.align 2
-node_count: .word 8
-start_node: .word 0
+num_nodes:      .word 8             # junctions J0..J7
+start_node:     .word 0             # SOURCE junction
+goal_node:      .word 6             # DESTINATION junction to navigate to
+
+dest_found:     .word 0             # 1 = destination reached
+explored_cnt:   .word 0             # junctions explored
+path_len:       .word 0             # roads in the route
+peak_size:      .word 0             # peak stack occupancy
+path_nodes:     .word 0             # junctions on the route
+
+queue_stack:    .word 0,0,0,0,0,0,0,0       # stack (LIFO for DFS)
+
+#               J0 J1 J2 J3 J4 J5 J6 J7
 adj_matrix:
-    .byte 0, 1, 1, 0, 0, 0, 0, 0
-    .byte 1, 0, 0, 1, 1, 0, 0, 0
-    .byte 1, 0, 0, 0, 0, 0, 1, 1
-    .byte 0, 1, 0, 0, 0, 1, 0, 0
-    .byte 0, 1, 0, 0, 0, 1, 0, 0
-    .byte 0, 0, 0, 1, 1, 0, 1, 0
-    .byte 0, 0, 1, 0, 0, 1, 0, 0
-    .byte 0, 0, 1, 0, 0, 0, 0, 0
-visited: .byte 0,0,0,0,0,0,0,0
-.align 2
-# DFS uses a stack of (node, next-neighbour-index) frames.
-node_stack: .word 0,0,0,0,0,0,0,0
-next_stack: .word 0,0,0,0,0,0,0,0
-traversal_order: .word 0,0,0,0,0,0,0,0
-explored_count: .word 0
-peak_frontier: .word 0
+        .byte 0, 1, 1, 0, 0, 0, 0, 0       # J0
+        .byte 1, 0, 0, 1, 1, 0, 0, 0       # J1
+        .byte 1, 0, 0, 0, 0, 0, 1, 1       # J2
+        .byte 0, 1, 0, 0, 0, 1, 0, 0       # J3
+        .byte 0, 1, 0, 0, 0, 1, 0, 0       # J4
+        .byte 0, 0, 0, 1, 1, 0, 1, 0       # J5
+        .byte 0, 0, 1, 0, 0, 1, 0, 0       # J6
+        .byte 0, 0, 1, 0, 0, 0, 0, 0       # J7
 
-.text
-.globl main
+visited:        .byte 0,0,0,0,0,0,0,0
+parent:         .byte -1,-1,-1,-1,-1,-1,-1,-1
+path_out:       .byte 0,0,0,0,0,0,0,0
+
+        .text
 main:
-    la s0, node_count
-    lw s0, 0(s0)              # N
-    la s1, start_node
-    lw s1, 0(s1)              # source
-    la s2, adj_matrix
-    la s3, visited
-    la s4, node_stack
-    la s5, next_stack
-    la s6, traversal_order
-    li s7, 0                  # stack depth
-    li s8, 0                  # explored count
-    li s9, 0                  # peak stack depth
+# ---- parameters and base addresses ---------------------------------
+        la   t0, num_nodes
+        lw   s0, 0(t0)
+        la   t0, start_node
+        lw   s1, 0(t0)
+        la   t0, goal_node
+        lw   s2, 0(t0)                  # s2 = destination
+        la   s7, adj_matrix
+        la   s8, visited
+        la   s9, parent
+        la   s10, queue_stack
+        la   s11, path_out
 
-    # Push source frame (node, next neighbour = 0).
-    slli t0, s7, 2
-    add t1, s4, t0
-    sw s1, 0(t1)
-    add t1, s5, t0
-    sw zero, 0(t1)
-    addi s7, s7, 1
-    li s9, 1
-    add t0, s3, s1
-    li t1, 1
-    sb t1, 0(t0)
-    sw s1, 0(s6)
-    li s8, 1
+# ---- clear work arrays and counters --------------------------------
+        li   t0, 0
+clr:    bge  t0, s0, clr_done
+        add  t1, s8, t0
+        sb   zero, 0(t1)                # visited[i] = 0
+        add  t1, s9, t0
+        li   t2, -1
+        sb   t2, 0(t1)                  # parent[i] = -1
+        add  t1, s11, t0
+        sb   zero, 0(t1)                # path_out[i] = 0
+        addi t0, t0, 1
+        j    clr
+clr_done:
+        la   t0, dest_found
+        sw   zero, 0(t0)
+        la   t0, path_len
+        sw   zero, 0(t0)
+        la   t0, peak_size
+        sw   zero, 0(t0)
+        la   t0, path_nodes
+        sw   zero, 0(t0)
 
-dfs_loop:
-    beqz s7, dfs_done
-    addi t0, s7, -1
-    slli t0, t0, 2
-    add t1, s5, t0
-    lw s10, 0(t1)             # next neighbour index
-    bge s10, s0, dfs_pop
+# ---- DFS init: push the source -------------------------------------
+        li   s4, 0                      # stack top (= stack size)
+        li   s5, 0                      # explored
+        li   s6, 0                      # peak
+        add  t1, s8, s1
+        li   t2, 1
+        sb   t2, 0(t1)                  # visited[source] = 1
+        sw   s1, 0(s10)                 # stack[0] = source
+        addi s4, s4, 1                  # top++
+        li   s6, 1                      # peak = 1
 
-    # Advance this frame before possibly pushing a child.
-    addi t2, s10, 1
-    sw t2, 0(t1)
-    add t1, s4, t0
-    lw s11, 0(t1)             # current node
+# ---- DFS loop ------------------------------------------------------
+dfs:    beq  s4, zero, report            # stack empty -> no route
+        addi s4, s4, -1                 # POP
+        slli t3, s4, 2
+        add  t3, s10, t3
+        lw   t4, 0(t3)                  # u = stack[top]
+        addi s5, s5, 1                  # explored++
+        beq  t4, s2, found              # destination reached?
 
-    # matrix[current][next], N=8 or N=9
-    slli t0, s11, 3
-    add t0, s2, t0
-    add t0, t0, s10
-    lbu t1, 0(t0)
-    beqz t1, dfs_loop
-    add t2, s3, s10
-    lbu t1, 0(t2)
-    bnez t1, dfs_loop
+        addi t5, s0, -1                 # v = N-1 downwards
+nb:     blt  t5, zero, dfs
+        slli t0, t4, 3                  # u*8  (row stride = 8 junctions)
+        add  t0, t0, t5
+        add  t0, s7, t0
+        lbu  t1, 0(t0)                  # adj[u][v]
+        beq  t1, zero, nb_next
+        add  t2, s8, t5
+        lbu  t3, 0(t2)
+        bne  t3, zero, nb_next          # already visited
+        li   t3, 1
+        sb   t3, 0(t2)                  # visited[v] = 1
+        add  t3, s9, t5
+        sb   t4, 0(t3)                  # parent[v] = u
+        slli t3, s4, 2
+        add  t3, s10, t3
+        sw   t5, 0(t3)                  # PUSH v
+        addi s4, s4, 1
+        bge  s6, s4, nb_next
+        mv   s6, s4                     # peak = max(peak, stack size)
+nb_next:
+        addi t5, t5, -1
+        j    nb
 
-    # Discover child: mark, record preorder, push new frame.
-    li t1, 1
-    sb t1, 0(t2)
-    slli t0, s8, 2
-    add t0, s6, t0
-    sw s10, 0(t0)
-    addi s8, s8, 1
+# ---- route found: rebuild it through parent[] ----------------------
+found:  li   t0, 1
+        la   t1, dest_found
+        sw   t0, 0(t1)                  # dest_found = 1
 
-    slli t0, s7, 2
-    add t1, s4, t0
-    sw s10, 0(t1)
-    add t1, s5, t0
-    sw zero, 0(t1)
-    addi s7, s7, 1
-    bge s9, s7, dfs_loop
-    mv s9, s7
-    jal zero, dfs_loop
+        li   t0, 0                      # count junctions
+        mv   t1, s2
+cnt:    blt  t1, zero, cnt_done
+        addi t0, t0, 1
+        add  t2, s9, t1
+        lb   t1, 0(t2)                  # cur = parent[cur]
+        j    cnt
+cnt_done:
+        la   t2, path_nodes
+        sw   t0, 0(t2)                  # path_nodes = count
+        addi t2, t0, -1
+        la   t3, path_len
+        sw   t2, 0(t3)                  # path_len = count - 1
 
-dfs_pop:
-    addi s7, s7, -1
-    jal zero, dfs_loop
+        addi t3, t0, -1                 # fill path_out[] source -> goal
+        mv   t1, s2
+fill:   blt  t1, zero, report
+        add  t2, s11, t3
+        sb   t1, 0(t2)
+        addi t3, t3, -1
+        add  t2, s9, t1
+        lb   t1, 0(t2)
+        j    fill
 
-dfs_done:
-    la t0, explored_count
-    sw s8, 0(t0)
-    la t0, peak_frontier
-    sw s9, 0(t0)
-
-    # Ripes environment call 10 terminates the program.
-    li a7, 10
-    ecall
+# ---- publish results and terminate ---------------------------------
+report:
+        la   t0, explored_cnt
+        sw   s5, 0(t0)                  # RESULT: junctions explored
+        la   t0, peak_size
+        sw   s6, 0(t0)                  # RESULT: peak frontier size
+        li   a7, 10                     # exit program
+        ecall
